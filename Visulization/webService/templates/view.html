@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Code Galaxy</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				color: #ffffff;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+				background-color: #000000;
+                margin: 0px;
+                overflow: hidden;
+			}
+
+			@-webkit-keyframes greenPulse {
+			  from { background-color: #749a02; -webkit-box-shadow: 0 0 9px #333; }
+			  50% { background-color: #91bd09; -webkit-box-shadow: 0 0 18px #91bd09; }
+			  to { background-color: #749a02; -webkit-box-shadow: 0 0 9px #333; }
+			}
+
+			button {
+			  -webkit-animation-name: greenPulse;
+			  -webkit-animation-duration: 2s;
+			  -webkit-animation-iteration-count: infinite;
+			}
+
+			a { color: #ffffff }
+
+			#info {
+				border-style: solid;
+				border-width: 2px;
+				border-color: 0xffffff;
+			}
+			#infoMediaBody {
+				position: relative;
+			    top: 5px;
+			}
+
+			p {
+				margin-left:auto;
+			}
+
+		</style>
+	</head>
+
+	<body>
+	<h3>Hand data:</h3>
+  	<div id="handData"></div>
+    	<div id="view"></div>
+<!--		<script src="/static/visualization/jquery/1.11.3/jquery.min.js"></script>
+-->		<script src='/static/visualization/galaxy/build/three.min.js'></script>
+		<script src="/static/visualization/galaxy/js/Detector.js"></script>
+		<script src="/static/visualization/galaxy/js/libs/stats.min.js"></script>
+		<script src="/static/visualization/galaxy/js/controls/leap-0.6.3.min.js"></script>
+		<script src="/static/visualization/galaxy/js/controls/TrackballControls.js"></script>
+	<script src='/static/visualization/galaxy/js/lib/dat.gui.min.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/postprocessing/EffectComposer.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/postprocessing/RenderPass.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/postprocessing/ShaderPass.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/postprocessing/MaskPass.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/shaders/CopyShader.js'></script>
+	<script src='/static/visualization/galaxy/js/lib/shaders/RGBShiftShader.js'></script>
+
+		<script type="x-shader/x-vertex" id="vertexshader">
+
+			uniform float amplitude;
+			attribute float size;
+			attribute vec3 customColor;
+
+			varying vec3 vColor;
+
+			void main() {
+				vColor = customColor;
+				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+				gl_PointSize = size * ( 700.0 / length( mvPosition.xyz ) );
+				gl_Position = projectionMatrix * mvPosition;
+			}
+
+		</script>
+
+		<script type="x-shader/x-fragment" id="fragmentshader">
+			uniform vec3 color;
+			uniform sampler2D texture;
+			varying vec3 vColor;
+			void main() {
+				gl_FragColor = vec4( color * vColor, 1.0 );
+				gl_FragColor = gl_FragColor * texture2D( texture, gl_PointCoord );
+			}
+		</script>
+
+
+		<script>
+        function getOrderNum(id) {
+        	for (var i = 0; i < nodeList.length; i++) {
+        		if ( nodeList[ i ].id == id ) {
+        			return i;
+        		}
+        	}
+        	return -1;
+        }
+		function getData() {
+            var i = 0;
+	        var nodeList = new Array();
+	        {% for node in nodes %}
+	          tmp = new Object();
+	          tmp.id 	= {{node['id']}};
+	          tmp.color = {{node['color']}};
+	          tmp.x 	= {{node['x']}};
+	          tmp.y 	= {{node['y']}};
+	          tmp.size 	= {{node['size']}};
+	          tmp.z 	= 0;
+	          tmp.pagerank = 0;
+	          tmp.node_degree = 0;
+	          nodeList[i] = tmp;
+	          i++;
+	        {% endfor %}
+	        return nodeList;
+	    }
+		function getEdges() {
+		    var i = 0;
+			var edgeList = new Array();
+			{%for edge in edges%}
+				tmp = new Object();
+				tmp.id = {{edge['id']}};
+				tmp.source = {{edge['source']}};
+				tmp.target = {{edge['target']}};
+				tmp.weight = {{edge['weight']}};
+				edgeList[i] = tmp;
+				i++;
+			{% endfor %}
+			return edgeList;
+		}
+
+		if ( ! Detector.webgl ) Detector.addGetWebGLMessage();
+
+		var renderer, scene, camera, stats;
+
+		var raycaster, intersects;
+		var mouse, INTERSECTED
+		var nodeList = getData();
+		var edgeList = getEdges();
+
+		var sphere;
+		var WIDTH = window.innerWidth;
+		var HEIGHT = window.innerHeight;
+		var composer;
+		var shaderTime = 0;
+		var rgbParams, rgbPass;
+		var renderPass, copyPass;
+		var gui;
+		init();
+		animate();
+
+		function init() {
+			var amount = nodeList.length;
+			var edge_amount = edgeList.length;
+			 //设置透视投影的相机,默认情况下相机的上方向为Y轴，右方向为X轴，沿着Z轴朝里，
+			camera = new THREE.PerspectiveCamera( 40, WIDTH / HEIGHT, 1, 500000 );
+			camera.position.z = 100;//设置相机的位置坐标
+			controls = new THREE.TrackballControls( camera );
+	        controls.rotateSpeed = 10.0;//按住鼠标左键后拖动查看时的旋转速度
+	        controls.zoomSpeed = 1.2;
+	        controls.panSpeed = 0.8;//按住鼠标右键后的平移速度
+	        controls.noZoom = false;
+	        controls.noPan = false;
+	        controls.staticMoving = false;
+	        controls.dynamicDampingFactor = 0.3;
+	        controls.keys = [ 65, 83, 68 ];
+	        controls.addEventListener( 'change', render );
+			//设置场景，相当于一个大容器
+			scene = new THREE.Scene();
+			var positions = new Float32Array( amount * 3 );
+			var colors = new Float32Array( amount * 3 );
+			var sizes = new Float32Array( amount );
+			var vertex = new THREE.Vector3();
+			var color = new THREE.Color( 0xffffff );
+			for ( var i = 0; i < amount; i ++ ) {
+				vertex.x = 10*nodeList[i].x/7;
+				vertex.y = 10*nodeList[i].y/7;
+				vertex.z = 10*nodeList[i].z;
+				vertex.toArray( positions, i * 3 );
+				color.setHex( nodeList[i].color );
+				color.toArray( colors, i * 3 );
+				sizes[ i ] = nodeList[i].size ;
+			//var map = new THREE.MeshBasicMaterial( { map: THREE.ImageUtils.loadTexture( "/static/visualization/galaxy/textures/box.bmp") } );
+			var texture = new THREE.TextureLoader().load( '/static/visualization/galaxy/textures/box.bmp' );
+			var geometry = new THREE.CubeGeometry( 5, 5, 5 );
+			var material = new THREE.MeshBasicMaterial( { map: texture } );
+			mesh = new THREE.Mesh( geometry, material );
+			//var tsphere = new THREE.Mesh(new THREE.SphereGeometry(10, 10, 10), map );  
+      //sphere.overdraw = true;  
+			//tsphere.position.set(vertex.x,vertex.y,vertex.z);
+			mesh.position.set(vertex.x,vertex.y,vertex.z);
+      //scene.add(tsphere); 
+scene.add(mesh); 
+			}
+			//几何形状，包括每个顶点的位置、颜色、法线（影响光照）
+			var geometry = new THREE.BufferGeometry();
+			geometry.addAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+			geometry.addAttribute( 'customColor', new THREE.BufferAttribute( colors, 3 ) );
+			geometry.addAttribute( 'size', new THREE.BufferAttribute( sizes, 1 ) );
+
+			//3D渲染着色材质，与交互无关
+			var material = new THREE.ShaderMaterial( {
+
+				uniforms: {
+					amplitude: { type: "f", value: 1 },
+					color:     { type: "c", value: new THREE.Color( 0xffffff ) },
+					texture:   { type: "t", value: THREE.ImageUtils.loadTexture( "/static/visualization/galaxy/textures/lensflare/lensflare0.png" ) }
+				},
+				vertexShader:   document.getElementById( 'vertexshader' ).textContent,
+				fragmentShader: document.getElementById( 'fragmentshader' ).textContent,
+				blending:       THREE.AdditiveBlending,
+				depthTest:      false,
+				transparent:    true
+
+			});
+
+			sphere = new THREE.Points( geometry, material );
+			scene.add( sphere );
+
+			//使用WebGL标准渲染
+			renderer = new THREE.WebGLRenderer();
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( WIDTH, HEIGHT );
+
+			var view = document.getElementById('view');
+			view.appendChild( renderer.domElement );
+
+			raycaster = new THREE.Raycaster();
+			mouse = new THREE.Vector2();
+
+			stats = new Stats();
+			stats.domElement.style.position = 'absolute';
+			stats.domElement.style.top = '0px';
+			view.appendChild( stats.domElement );
+			window.addEventListener( 'resize', onWindowResize, false );
+			document.addEventListener( 'mousemove', onDocumentMouseMove, false );//鼠标移动！
+			document.onkeydown = handleKeyDown;//通过键盘改变距离
+			rgbParams = {
+				show: true,
+				amount: 0.2,
+				angle: 0.8,
+			};
+			gui = new dat.GUI();
+			var f2 = gui.addFolder('RGB Shift');
+			f2.add(rgbParams, 'show').onChange(onToggleShaders);
+			f2.add(rgbParams, 'amount', 0.0, 0.1).listen().onChange(onParamsChange);
+			f2.add(rgbParams, 'angle', 0.0, 2.0).listen().onChange(onParamsChange);
+			f2.open();
+			gui.close();
+			onToggleShaders();
+			onParamsChange();
+		//	window.addEventListener('resize', onWindowResize, false);
+		//	renderer.domElement.addEventListener('click', randomizeParams, false);
+			onWindowResize();
+			//randomizeParams();
+		}
+		function handleKeyDown(e) //键盘上下左右该改变效果（距离）
+    	{
+    	var keynum;
+    	var keychar;
+    	keynum = window.event ? e.keyCode : e.which;
+    	keychar = String.fromCharCode(keynum);
+    //	alert(keynum+':'+keychar);
+    	if (keynum==37) {
+            // left
+            rgbParams.amount -= 0.01;
+            if(rgbParams.amount<=0)rgbParams.amount=0;
+            onParamsChange();
+        }
+        if (keychar=='\'') {
+            // right
+            rgbParams.amount += 0.01;
+            if(rgbParams.amount>=0.1)rgbParams.amount=0.1;
+            onParamsChange();
+        }
+        if (keychar=='&') {
+            // up
+           	rgbParams.angle -= 0.1;
+           	if(rgbParams.angle<=0)rgbParams.angle=0;
+            onParamsChange();
+        }
+        if (keychar=='(') {
+            // down
+            rgbParams.angle += 0.1;
+            if(rgbParams.angle>=2)rgbParams.angle=2;
+            onParamsChange();
+        }
+      }
+
+		function onDocumentMouseMove( event ) {
+			event.preventDefault();
+			mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+			mouse.y = -( event.clientY / window.innerHeight ) * 2 + 1;
+		}
+
+		function onWindowResize() {  //窗口大小适应
+
+			camera.aspect = window.innerWidth / window.innerHeight;
+			camera.updateProjectionMatrix();
+
+			controls.handleResize();
+			renderer.setSize( window.innerWidth, window.innerHeight );
+
+		}
+
+		function onParamsChange() { //改变距离
+
+			//copy gui params into shader uniforms
+			rgbPass.uniforms[ 'angle' ].value = rgbParams.angle*Math.PI;
+			rgbPass.uniforms[ 'amount' ].value = rgbParams.amount;
+		}
+
+
+		function randomizeParams() {  //随机改变距离
+
+			if (Math.random() <0.2){
+				//you fixed it!
+				rgbParams.angle = 0;
+				rgbParams.amount = 0;
+			}else{
+				rgbParams.angle = Math.random()*2;
+				rgbParams.amount = Math.random()*0.03;
+			}
+			onParamsChange();
+		}
+
+
+	function onToggleShaders(){  // 渲染
+			renderPass = new THREE.RenderPass( scene, camera );
+			rgbPass = new THREE.ShaderPass( THREE.RGBShiftShader );
+			copyPass = new THREE.ShaderPass( THREE.CopyShader );
+			//Add Shader Passes to Composer
+			//order is important
+			composer = new THREE.EffectComposer( renderer);
+			composer.addPass( renderPass );
+			if (rgbParams.show){
+				composer.addPass( rgbPass );
+			}
+			composer.addPass( copyPass );
+			copyPass.renderToScreen = true;
+		}
+
+		function animate() { //循环
+			requestAnimationFrame( animate );
+			shaderTime += 0.1;
+			composer.render( 0.1);
+			render();
+			stats.update();
+			controls.update();
+		}
+
+		var count = 0
+		function up(ei) {
+            for (var i = 0; i < edgeList.length; i++) {
+                if (ei == edgeList[i].target) {
+                    count++;
+                    up(edgeList[i].source);
+                }
+            }
+        }
+
+	window.onload=function() {
+            var nll = nodeList.length;
+            var ell = edgeList.length;
+            var max = 0;
+			// pagerank需要用到的系数d
+			var d = 0.85;
+
+			//计算出度入度
+			for ( var i = 0; i < ell; i ++ ) {
+				if(getOrderNum(edgeList[i].source)){
+					nodeList[getOrderNum(edgeList[i].source)].node_degree++;
+				}
+				if(getOrderNum(edgeList[i].target)){
+					nodeList[getOrderNum(edgeList[i].target)].node_degree++;
+				}
+			}
+
+			//计算总加权度
+            var total_weight = 0;
+            for (var i = 0; i < ell; i++) {
+                var target = edgeList[i].target;
+                for (var j = 0; j < ell; j++) {
+                    if (edgeList[j].source == target)
+                        break;
+                }
+                //找出叶子节点
+                if (j == ell) {
+                    var begin = count;
+                    up(edgeList[i].target);
+                    var end = count;
+                    var length = end - begin;
+                    if (length > max) {
+                        max = length;
+                    }
+                }
+                total_weight+=edgeList[i].weight;
+            }
+
+			//计算总路径长度和路径个数
+            var total_length=0;
+            var total_num=0;
+            for (var i = 0; i < ell; i++) {
+            	count = 0;
+            	up(edgeList[i].target);
+            	total_length += count*(count+1)/2;
+            	total_num += count;
+            }
+
+            var average_path_length = total_length / total_num;
+            var avg_weight_degree = total_weight / nll;
+            var average_degree = ell /nll;
+            var density = ell / (nll * nll - nll);
+
+			// 计算弱连通图
+			var weak_connect = 0;
+			var pre = new Array();
+			//find函数为查找
+			function find(a){
+				if(pre[a]!=a)
+					pre[a]=find(pre[a]);
+				return pre[a];
+			}
+			//join函数为合并
+			function join(x, y) {
+				var fx=find(x);
+				var fy=find(y);
+				if(fx!=fy)
+					pre[fy]=fx;
+			}
+			for(var i=0; i<nll; i++) {
+				pre[i]=i;
+			}
+			for(var i=0; i<ell; i++) {
+				join(getOrderNum(edgeList[i].source),getOrderNum(edgeList[i].target));
+			}
+			for(var i=0; i<nll; i++)
+				if(pre[i]==i) weak_connect++;
+
+			// 计算强联通图
+			var strong_connect = 0;
+			var instack = new Array();
+			var stack = new Array();
+			var dfn = new Array();
+			var low = new Array();
+			var edge_array = new Array();
+			var i =0;
+			{%for edge in edges%}
+				tmp = new Object();
+				tmp.v = {{edge['id']}};
+				tmp.next=0;
+				edge_array[i] = tmp;
+				i++;
+			{% endfor %}
+			var node_array = new Array();
+			var time=0;
+			var top=0;
+			var cnt=0;
+			for(var i=0; i<nll; i++)
+				node_array[i]=-1;
+			function build(u,v) {
+				edge_array[cnt].next=node_array[u];
+				edge_array[cnt].v=v;
+				node_array[u]=cnt++;
+			}
+			for(var i=0; i<ell; i++)
+				build(getOrderNum(edgeList[i].source), getOrderNum(edgeList[i].target));
+
+			function tarjan(u) {
+				dfn[u]=low[u]=++time;
+				instack[u]=1;
+				stack[++top]=u;
+				for (var i=node_array[u]; i!=-1; i=edge_array[i].next) {
+
+						var v = edge_array[i].v;
+						if(!dfn[v]) {
+							tarjan(v);
+							if(low[v]>low[u])
+								low[v]=low[u];
+						}
+						else
+						{
+							if(instack[v] && dfn[v]<low[u])
+								low[u]=dfn[v];
+						}
+
+				}
+				if(dfn[u]==low[u]) {
+					var j;
+					var h=0;
+					do {
+						j=stack[top--];
+						instack[j]=0;
+						h++;
+						if(h>=2)
+						    strong_connect++;
+					} while(j!=u)
+				}
+
+			}
+
+			for(var i=0; i<nll; i++)
+				if(!dfn[i])
+					tarjan(i);
+
+			// 计算PangRank
+			/*--------------------------------*/
+			for (var i=0; i<ell; i++) {
+				if(getOrderNum(edgeList[i].source))
+				{
+					nodeList[getOrderNum(edgeList[i].source)].pagerank+=1.0/nodeList[getOrderNum(edgeList[i].target)].node_degree;
+				}
+				if(getOrderNum(edgeList[i].target)){
+					nodeList[getOrderNum(edgeList[i].target)].pagerank+=1.0/nodeList[getOrderNum(edgeList[i].source)].node_degree;
+				}
+			}
+			for (var i=0; i<nll ; i++){
+				nodeList[i].pagerank=d*nodeList[i].pagerank+(1-d)/nll;
+			}
+			/*--------------------------------*/
+
+            var mydiv = document.createElement("div");
+            mydiv.setAttribute("id", "hint");
+            mydiv.style.position = "absolute";
+            mydiv.style.lineHeight = "15px";
+            mydiv.style.borderStyle = "none";
+            mydiv.style.display = "none";
+            mydiv.style.textAlign = "left";
+            mydiv.style.width = "300px";
+            mydiv.style.marginTop="150px";
+            document.body.appendChild(mydiv);
+            document.addEventListener("mousemove", function (e) {
+                var myhint = document.getElementById("hint");
+                myhint.style.display = "block";
+                myhint.style.left = (window.innerWidth -400) + "px";
+                myhint.style.top = "15px";
+                myhint.innerHTML = "<table><tr><td style='font-size:15pt;' width='70%' height='30px'>当前点信息：" + "" +
+					"</td><td></td></tr><tr><td>x坐标</td><td>" + nodeList[INTERSECTED].x.toFixed(4) +
+                    "</td></tr><tr><td>y坐标</td><td>" + nodeList[INTERSECTED].y.toFixed(4) +
+                    "</td></tr><tr><td>编号</td><td>" + nodeList[INTERSECTED].id +
+                    "</td></tr><tr><td>大小</td><td>" + nodeList[INTERSECTED].size +
+                    "</td></tr><tr><td>点的出入度</td><td>"+nodeList[INTERSECTED].node_degree+
+					"</td></tr><tr><td>PageRank</td><td>"+nodeList[INTERSECTED].pagerank.toFixed(6)+
+                    "</td></tr><tr><td style='font-size:12pt;'>网络概述：</td><td></td></tr><tr><td>密度</td><td>" + density.toFixed(4) +
+                    "</td></tr><tr><td>平均度</td><td>" + average_degree.toFixed(4) +
+                    "</td></tr><tr><td>网络直径</td><td>" + max +
+                    "</td></tr><tr><td>平均加权度</td><td>" + avg_weight_degree.toFixed(4) +
+                    "</td></tr><tr><td>平均路径长度</td><td>" + average_path_length.toFixed(4) +
+					"</td></tr><tr><td>强连通图数</td><td>"+strong_connect+
+					"</td></tr><tr><td>弱连通图数</td><td>"+weak_connect+
+                    "</td></tr>";
+            });
+        }
+
+		function render() {
+			var time = Date.now() * 0.005;
+			var geometry = sphere.geometry;
+			var attributes = geometry.attributes;
+			//
+			raycaster.setFromCamera( mouse, camera );
+			intersects = raycaster.intersectObject( sphere );
+			console.warn(intersects);
+			for ( var i = 0; i < attributes.size.array.length; i++ ) {
+				attributes.size.array[ i ] = nodeList[ i ].size; //Math.sin(0.1*i + time)
+			}
+			if ( intersects.length > 0 ) {
+				if ( INTERSECTED != intersects[ 0 ].index ) {
+					INTERSECTED = intersects[ 0 ].index;
+				}
+				attributes.size.array[ INTERSECTED ] = nodeList[ INTERSECTED ].size * 5 + 5;
+			}
+			attributes.size.needsUpdate = true;
+//			renderer.render( scene, camera );
+	}
+
+
+	</script>
+
+
+</body>
+
+</html>
